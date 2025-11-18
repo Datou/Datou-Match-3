@@ -1,20 +1,14 @@
 # Match-3 Analyzer - 三消关卡“临界胜利点”分析器
 
-
-
-https://github.com/user-attachments/assets/d7c37702-bb08-4983-aaf6-fef5fa2604ce
-
-
-
-[![License: MIT]](https://opensource.org/licenses/MIT)
-
-一个独特的Web小工具，不仅可以让你在线试玩多个预设的三消游戏关卡，更核心的功能是利用AI模拟来寻找每个关卡最关键的“临界胜利点”（Almost Win Point）。
+三消游戏的主要盈利模式是让玩家在“还差一步”的时候卡关，引诱玩家购买“再加五步”的道具或者观看视频广告。这个项目不仅可以让你在线试玩多个预设的三消游戏关卡，更核心的功能是利用AI模拟来寻找每个关卡最关键的“临界胜利点”（Almost Win Point）。
 
 "临界胜利点"指的是这样一个步数：在该步数下，玩家的胜率很低；但只要再增加几步，胜率就会出现显著的跃升。找到这个点，对于关卡设计师平衡游戏难度至关重要。
 
 **[ 演示与使用说明 (How to Use) ]**
 
 由于这是一个纯前端项目，您无需进行任何安装。只需在您的浏览器中打开 `match3.html` 文件即可开始使用。
+
+https://github.com/user-attachments/assets/d7c37702-bb08-4983-aaf6-fef5fa2604ce
 
 ---
 
