@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Linus' Match-3 Analyzer v16 (DOM Bugfix)</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #1e1e1e; color: #d4d4d4; display: flex; justify-content: center; align-items: flex-start; padding: 20px; }
+        #container { display: flex; gap: 30px; }
+        #controls { width: 350px; display: flex; flex-direction: column; gap: 15px; }
+        #game-area { display: flex; flex-direction: column; align-items: center; }
+        h1, h2 { color: #569cd6; border-bottom: 1px solid #444; padding-bottom: 5px; margin-top: 0; }
+        label { font-weight: bold; }
+        select, button, input { width: 100%; padding: 10px; background: #333; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; font-size: 16px; cursor: pointer; box-sizing: border-box; }
+        button:hover { background: #444; }
+        button:disabled { background: #2a2a2a; color: #888; cursor: not-allowed; }
+        #status-log { font-family: "Courier New", Courier, monospace; background: #111; border: 1px solid #444; padding: 10px; height: 300px; overflow-y: scroll; white-space: pre-wrap; font-size: 12px; }
+        #board-container { margin-top: 20px; border: 2px solid #569cd6; background: #2a2a2a; }
+        #game-info { font-size: 20px; margin-bottom: 10px; color: #ce9178; }
+        .board { display: grid; }
+        .cell { width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; font-size: 28px; box-sizing: border-box; user-select: none; transition: transform 0.1s, border 0.1s; }
+        .cell.selected { border: 2px solid #f0e68c; border-radius: 4px; transform: scale(1.1); }
+        .empty-cell { background-color: #2a2a2a; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <div id="controls">
+        <h1>Controls</h1>
+        <label for="level-select">1. Select a Level:</label>
+        <select id="level-select">
+            <option value="0">Level 1: Final Design</option>
+            <option value="1">Level 2: The Cages</option>
+            <option value="2">Level 3: Auto-Clear</option>
+            <option value="3">Level 4: The Choke Point</option> 
+        </select>
+
+        <label for="iterations">2. Set AI Test Iterations:</label>
+        <select id="iterations">
+            <option value="50">50 (Recommended)</option>
+            <option value="100">100 (Standard)</option>
+            <option value="200">200 (Thorough)</option>
+            <option value="1">1 (Single Run)</option>
+        </select>
+
+        <label for="seed">2a. Set Analysis Seed ('' for random):</label>
+        <input type="text" id="seed" value="torvalds">
+
+        <button id="run-analysis">3. Find the "Almost Win" Point</button>
+        
+        <h2>Analysis Log</h2>
+        <div id="status-log">V16: Fixed a stupid DOM initialization bug from the last refactor.</div>
+
+        <button id="play-level" disabled>4. Play This Level</button>
+    </div>
+
+    <div id="game-area">
+        <h1 id="level-title">Game Board</h1>
+        <div id="game-info"></div>
+        <div id="board-container"></div>
+    </div>
+</div>
+
+<script>
+// --- CORE CONFIGURATION & DATA ---
+const PIECE_TYPES = 6;
+const TARGET_ID = 99;
+const EMPTY_ID = 0;
+const EMOJIS = ['🍇', '🍓', '🍊', '🥥', '🍋‍🟩', '🍍'];
+const TARGET_EMOJI = '📦';
+const PRIORITY_MOVE_WEIGHT = 10; 
+
+const LEVELS = [
+    { name: "Level 1: Final Design", targets: [{ type: TARGET_ID }], layout: [ [1,2,3,4,5,6,1], [2,3,4,5,6,1,2], [99,99,99,99,99,99,99], [0,99,99,99,99,99,0], [0,0,99,99,99,0,0], [0,0,0,99,99,0,0] ] },
+    { name: "Level 2: The Cages", targets: [{ type: TARGET_ID }], layout: [ [99,99,1,2,3,99,99], [99,99,2,3,4,99,99], [1,2,3,4,5,6,1], [99,99,4,5,6,99,99], [1,2,3,4,5,6,1], [99,99,6,1,2,99,99], [99,99,5,6,1,99,99] ] },
+    { name: "Level 3: Auto-Clear", targets: [{ type: TARGET_ID }], layout: [ [99,99,99,1,99,99,99], [99,99,99,2,99,99,99], [99,99,99,3,99,99,99], [1,2,3,4,5,6,1], [1,2,3,4,5,6,1], [1,2,3,4,5,6,1] ] },
+    { name: "Level 4: The Choke Point", targets: [{ type: TARGET_ID }], layout: [ [99,99,99,1,2,1,99], [99,99,99,3,4,3,99], [99,99,99,5,6,5,99], [1,2,3,99,4,5,6], [99,99,99,99,99,99,99], [99,99,99,99,99,99,99], [99,99,99,99,99,99,99] ] }
+];
+
+class SeededRandom {
+    constructor(seedStr) {
+        let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
+        for (let i = 0, k; i < seedStr.length; i++) {
+            k = seedStr.charCodeAt(i);
+            h1 = h2 ^ Math.imul(h1 ^ k, 597399067); h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+            h3 = h4 ^ Math.imul(h3 ^ k, 951274213); h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+        }
+        this.seed = (h1^h2^h3^h4)>>>0;
+    }
+    next() {
+        var t = this.seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+}
+
+const dom = {};
+let gameState = {};
+const deepClone = (obj) => JSON.parse(JSON.stringify(obj));
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+class Match3Game {
+    constructor(level, moves, prng) {
+        this.board = deepClone(level.layout);
+        this.targets = deepClone(level.targets);
+        this.rows = this.board.length;
+        this.cols = this.board[0].length;
+        this.movesLeft = moves;
+        this.prng = prng || { next: Math.random };
+        this.isPlayer = false; this.selectedCell = null; this.isProcessing = false;
+        let actualTargetCount = 0;
+        for (let r = 0; r < this.rows; r++) { for (let c = 0; c < this.cols; c++) { if (this.board[r][c] === TARGET_ID) actualTargetCount++; } }
+        this.targets[0].count = actualTargetCount;
+    }
+    swap(r1, c1, r2, c2) { [this.board[r1][c1], this.board[r2][c2]] = [this.board[r2][c2], this.board[r1][c1]]; }
+    isGameWon() { return this.targets.every(t => t.count <= 0); }
+    isGameLost() { return this.movesLeft <= 0 && !this.isGameWon(); }
+    setPlayerMode(isPlayer) { this.isPlayer = isPlayer; }
+}
+
+class WeightedHeuristicAI {
+    constructor(game) { this.game = game; }
+    findBestMove() {
+        const allMoves = this.game.findPossibleMoves();
+        if (allMoves.length === 0) return null;
+        const priorityMoves = [], otherMoves = [];
+        for (const move of allMoves) {
+            this.game.swap(move.r1, move.c1, move.r2, move.c2);
+            const matches = this.game.findAllMatches();
+            let isTargetAdjacent = false;
+            for (const match of matches) {
+                for (const cell of match.cells) {
+                    for (let dr = -1; dr <= 1; dr++) { for (let dc = -1; dc <= 1; dc++) {
+                        if (dr === 0 && dc === 0) continue;
+                        const nr = cell.r + dr, nc = cell.c + dc;
+                        if (nr >= 0 && nr < this.game.rows && nc >= 0 && nc < this.game.cols && this.game.board[nr][nc] === TARGET_ID) {
+                            isTargetAdjacent = true; break;
+                        }
+                    } if (isTargetAdjacent) break; }
+                } if (isTargetAdjacent) break;
+            }
+            this.game.swap(move.r1, move.c1, move.r2, move.c2); 
+            if (isTargetAdjacent) { priorityMoves.push(move); } else { otherMoves.push(move); }
+        }
+        const weightedPool = [];
+        if (priorityMoves.length > 0) {
+            for (const move of priorityMoves) { for (let i = 0; i < PRIORITY_MOVE_WEIGHT; i++) weightedPool.push(move); }
+        }
+        for (const move of otherMoves) { weightedPool.push(move); }
+        if (weightedPool.length === 0) return allMoves[0]; 
+        const randomIndex = Math.floor(this.game.prng.next() * weightedPool.length);
+        return weightedPool[randomIndex];
+    }
+    async runGame(maxMoves) {
+        await this.game.stabilizeBoard();
+        for (let i = 0; i < maxMoves; i++) {
+            if (this.game.isGameWon()) return true;
+            const move = this.findBestMove(); 
+            if (!move) return false;
+            await this.game.processMove(move.r1, move.c1, move.r2, move.c2);
+        }
+        return this.game.isGameWon();
+    }
+}
+
+class Simulation {
+    constructor(level, seed) { this.level = level; this.seed = seed; }
+    async runSingleTest(moves, iterationIndex) {
+        const runSeed = this.seed ? `${this.seed}-${iterationIndex}` : `${Date.now()}-${Math.random()}`;
+        const prng = new SeededRandom(runSeed);
+        const game = new Match3Game(this.level, moves, prng); 
+        const ai = new WeightedHeuristicAI(game); 
+        return await ai.runGame(moves); 
+    }
+    runBatch(moves, iterations, progressCallback) {
+        return new Promise(resolve => {
+            let wins = 0; let i = 0;
+            const run = async () => {
+                if (i < iterations) {
+                    if (await this.runSingleTest(moves, i)) wins++;
+                    i++;
+                    if (progressCallback) progressCallback(i, iterations);
+                    setTimeout(run, 0); 
+                } else { resolve((wins / iterations) * 100); }
+            }; run();
+        });
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // --- FIX: ALL dom properties must be assigned here ---
+    dom.levelSelect = document.getElementById('level-select');
+    dom.iterationsSelect = document.getElementById('iterations');
+    dom.seedInput = document.getElementById('seed'); // This was the missing line
+    dom.runAnalysisBtn = document.getElementById('run-analysis');
+    dom.playLevelBtn = document.getElementById('play-level');
+    dom.statusLog = document.getElementById('status-log');
+    dom.boardContainer = document.getElementById('board-container');
+    dom.levelTitle = document.getElementById('level-title');
+    dom.gameInfo = document.getElementById('game-info');
+    
+    dom.runAnalysisBtn.addEventListener('click', async () => {
+        dom.runAnalysisBtn.disabled = true; dom.playLevelBtn.disabled = true; dom.runAnalysisBtn.textContent = "Analyzing...";
+        let fullLog = "";
+        const selectedLevel = LEVELS[dom.levelSelect.value];
+        const seed = dom.seedInput.value;
+        const iterations = parseInt(dom.iterationsSelect.value, 10);
+        const sim = new Simulation(selectedLevel, seed);
+        analysisResult = { levelIndex: dom.levelSelect.value, rates: [] };
+        const seedMsg = seed ? `with seed: "${seed}"` : "with random seed";
+        fullLog = `Starting analysis for ${selectedLevel.name} ${seedMsg} (${iterations} iteration(s) per step)...\n\n`;
+        dom.statusLog.textContent = fullLog;
+        for(let moves = 5; moves <= 40; moves++) {
+            const progressCallback = (current, total) => { dom.statusLog.textContent = `Analyzing with ${moves} moves... (${current}/${total})\n\n` + fullLog; };
+            const winRate = await sim.runBatch(moves, iterations, progressCallback);
+            analysisResult.rates.push({ moves, winRate });
+            fullLog = `- ${moves} moves: ${winRate.toFixed(1)}% win rate.\n` + fullLog;
+            dom.statusLog.textContent = fullLog;
+        }
+        let bestSpot = { moves: 0, increase: 0, lowRate: 100, highRate: 0 };
+        for(let i = 0; i < analysisResult.rates.length - 5; i++) {
+            const rateNow = analysisResult.rates[i].winRate;
+            const rateLater = analysisResult.rates[i+5].winRate;
+            if (rateNow <= 10 && rateLater >= 50) {
+                const increase = rateLater - rateNow;
+                if (increase > bestSpot.increase) { bestSpot = { moves: analysisResult.rates[i].moves, increase, lowRate: rateNow, highRate: rateLater }; }
+            }
+        }
+        analysisResult.recommendedMoves = bestSpot.moves > 0 ? bestSpot.moves : (analysisResult.rates.find(r => r.winRate > 10)?.moves || 20);
+        let finalReport = "--- ANALYSIS COMPLETE ---\n";
+        if (bestSpot.moves > 0) {
+            finalReport += `Found significant win-rate increase around ${bestSpot.moves} moves.\n`;
+            finalReport += `Win rate at ${bestSpot.moves} moves: ${bestSpot.lowRate.toFixed(1)}%\n`;
+            finalReport += `Win rate at ${bestSpot.moves + 5} moves: ${bestSpot.highRate.toFixed(1)}%\n`;
+        } else {
+            finalReport += "Could not find a clear win-rate cliff meeting the criteria.\n";
+        }
+        dom.statusLog.textContent = finalReport + "\n\n" + fullLog;
+        dom.playLevelBtn.disabled = false;
+        dom.playLevelBtn.textContent = `4. Play with ${analysisResult.recommendedMoves} moves`;
+        dom.runAnalysisBtn.disabled = false; dom.runAnalysisBtn.textContent = '3. Find the "Almost Win" Point';
+    });
+
+    dom.playLevelBtn.addEventListener('click', async () => {
+        const levelIndex = analysisResult.levelIndex !== undefined ? analysisResult.levelIndex : dom.levelSelect.value;
+        const level = LEVELS[levelIndex];
+        const moves = analysisResult.recommendedMoves || 25;
+        gameState = new Match3Game(level, moves);
+        gameState.setPlayerMode(true);
+        gameState.isProcessing = true;
+        await gameState.stabilizeBoard();
+        gameState.isProcessing = false;
+    });
+
+    dom.levelSelect.addEventListener('change', () => {
+        const level = LEVELS[dom.levelSelect.value];
+        const previewGame = new Match3Game(level, 0);
+        previewGame.render();
+        dom.playLevelBtn.disabled = true;
+        dom.playLevelBtn.textContent = "4. Play This Level";
+        analysisResult = {};
+    });
+
+    dom.seedInput.addEventListener('input', () => {
+        if (dom.seedInput.value === '') {
+            if (parseInt(dom.iterationsSelect.value, 10) < 50) {
+                dom.iterationsSelect.value = "50";
+            }
+        }
+    });
+    
+    dom.levelSelect.dispatchEvent(new Event('change'));
+});
+
+// Full prototype implementations are needed for the game to run.
+Match3Game.prototype.stabilizeBoard = async function() {
+    if(this.isPlayer) this.render();
+    let changedInLoop = true, safety = 0;
+    while(changedInLoop) {
+        if (++safety > 100) { console.error("Stabilize loop limit."); break; }
+        changedInLoop = false;
+        let gravityMoved;
+        do {
+            const matches = this.findAllMatches();
+            if (matches.length > 0) {
+                changedInLoop = true;
+                this.clearMatches(matches); this.updateTargets(matches);
+                if (this.isPlayer) { this.render(); await sleep(200); }
+            }
+            gravityMoved = this.applyGravity();
+            if (gravityMoved) {
+                changedInLoop = true;
+                if (this.isPlayer) { this.render(); await sleep(100); }
+            }
+        } while (gravityMoved);
+        if (this.fillNewPieces()) changedInLoop = true;
+        if (!this.findPossibleMoves().length && !this.isGameWon()) {
+            if (this.isPlayer) { dom.statusLog.textContent = "No moves left! Shuffling board..."; await sleep(500); }
+            this.shuffleBoard();
+            changedInLoop = true; 
+        }
+    }
+    if(this.isPlayer) this.render();
+};
+Match3Game.prototype.shuffleBoard = function() {
+    const pieces = [], emptySpots = [];
+    for(let r=0; r<this.rows; r++) { for(let c=0; c<this.cols; c++) { if(this.board[r][c] > 0 && this.board[r][c] < TARGET_ID) { pieces.push(this.board[r][c]); emptySpots.push({r, c}); } } }
+    for (let i = pieces.length - 1; i > 0; i--) { const j = Math.floor(this.prng.next() * (i + 1)); [pieces[i], pieces[j]] = [pieces[j], pieces[i]]; }
+    for(const spot of emptySpots) this.board[spot.r][spot.c] = pieces.pop();
+};
+Match3Game.prototype.applyGravity = function() {
+    let moved = false;
+    for (let r = this.rows - 2; r >= 0; r--) { for (let c = 0; c < this.cols; c++) { if (this.board[r][c] > 0 && this.board[r+1][c] === EMPTY_ID) { this.board[r+1][c] = this.board[r][c]; this.board[r][c] = EMPTY_ID; moved = true; } } }
+    return moved;
+};
+Match3Game.prototype.fillNewPieces = function() {
+    let filled = false;
+    for (let c = 0; c < this.cols; c++) { if (this.board[0][c] === EMPTY_ID) { this.board[0][c] = Math.floor(this.prng.next() * PIECE_TYPES) + 1; filled = true; } }
+    return filled;
+};
+Match3Game.prototype.processMove = async function(r1, c1, r2, c2) {
+    this.swap(r1, c1, r2, c2);
+    if(this.isPlayer) this.movesLeft--;
+    await this.stabilizeBoard();
+};
+Match3Game.prototype.findPossibleMoves = function() {
+    const moves = [];
+    const testSwap = (r1, c1, r2, c2) => {
+        if (r2 < 0 || r2 >= this.rows || c2 < 0 || c2 >= this.cols || this.board[r1][c1] <= 0 || this.board[r2][c2] <= 0 || this.board[r1][c1] >= TARGET_ID || this.board[r2][c2] >= TARGET_ID) return;
+        this.swap(r1, c1, r2, c2); if (this.findAllMatches().length > 0) moves.push({ r1, c1, r2, c2 }); this.swap(r1, c1, r2, c2);
+    };
+    for (let r = 0; r < this.rows; r++) { for (let c = 0; c < this.cols; c++) { testSwap(r, c, r + 1, c); testSwap(r, c, r, c + 1); } }
+    return moves;
+};
+Match3Game.prototype.findAllMatches = function() {
+    const matches = new Set();
+    for (let r = 0; r < this.rows; r++) { for (let c = 0; c < this.cols; c++) {
+        const piece = this.board[r][c]; if (piece <= 0 || piece >= TARGET_ID) continue;
+        let hMatch = [{r,c}]; for (let i = c + 1; i < this.cols && this.board[r][i] === piece; i++) hMatch.push({r, c: i}); if (hMatch.length >= 3) matches.add(JSON.stringify({piece, cells: hMatch}));
+        let vMatch = [{r,c}]; for (let i = r + 1; i < this.rows && this.board[i][c] === piece; i++) vMatch.push({r: i, c}); if (vMatch.length >= 3) matches.add(JSON.stringify({piece, cells: vMatch}));
+    }} return Array.from(matches).map(m => JSON.parse(m));
+};
+Match3Game.prototype.clearMatches = function(matches) { for (const match of matches) { for (const cell of match.cells) { this.board[cell.r][cell.c] = EMPTY_ID; } } };
+Match3Game.prototype.updateTargets = function(matches) {
+    let cleared = new Set();
+    const checkAdjacent = (r, c) => {
+        for (let dr = -1; dr <= 1; dr++) { for (let dc = -1; dc <= 1; dc++) { if (dr === 0 && dc === 0) continue; const nr = r + dr, nc = c + dc; if (nr >= 0 && nr < this.rows && nc >= 0 && nc < this.cols && this.board[nr][nc] === TARGET_ID) cleared.add(`${nr},${nc}`); } }
+    };
+    for (const match of matches) { for (const cell of match.cells) { checkAdjacent(cell.r, cell.c); } }
+    cleared.forEach(pos => { const [r, c] = pos.split(',').map(Number); this.board[r][c] = EMPTY_ID; this.targets[0].count = Math.max(0, this.targets[0].count - 1); });
+};
+Match3Game.prototype.render = function() {
+    const level = LEVELS[dom.levelSelect.value]; dom.levelTitle.textContent = level.name;
+    const targetsLeft = this.targets[0].count > 0 ? this.targets[0].count : 0;
+    dom.gameInfo.textContent = `Moves: ${this.movesLeft} | Targets: ${targetsLeft}`;
+    const boardEl = document.createElement('div'); boardEl.className = 'board'; boardEl.style.gridTemplateColumns = `repeat(${this.cols}, 1fr)`;
+    for (let r = 0; r < this.rows; r++) { for (let c = 0; c < this.cols; c++) {
+        const cell = document.createElement('div'); cell.className = 'cell'; const piece = this.board[r][c];
+        if (piece > 0 && piece < TARGET_ID) cell.textContent = EMOJIS[piece - 1];
+        else if (piece === TARGET_ID) cell.textContent = TARGET_EMOJI;
+        else cell.classList.add('empty-cell');
+        if (this.isPlayer && piece > 0 && piece < TARGET_ID) { cell.dataset.r = r; cell.dataset.c = c; cell.addEventListener('click', () => this.handleCellClick(r, c)); }
+        if (this.selectedCell && this.selectedCell.r === r && this.selectedCell.c === c) cell.classList.add('selected');
+        boardEl.appendChild(cell);
+    }}
+    dom.boardContainer.innerHTML = ''; dom.boardContainer.appendChild(boardEl);
+    if (this.isGameWon()) dom.gameInfo.textContent = "LEVEL COMPLETE!"; else if (this.isGameLost()) dom.gameInfo.textContent = "OUT OF MOVES. GAME OVER.";
+};
+Match3Game.prototype.handleCellClick = async function(r, c) {
+    if (this.isProcessing || this.isGameWon() || this.isGameLost()) return;
+    if (!this.selectedCell) { this.selectedCell = { r, c }; this.render(); return; }
+    const { r: r1, c: c1 } = this.selectedCell; this.selectedCell = null;
+    if (r1 === r && c1 === c) { this.render(); return; }
+    if (Math.abs(r1 - r) + Math.abs(c1 - c) === 1) {
+        this.swap(r1, c1, r, c); const isMatch = this.findAllMatches().length > 0; this.swap(r1, c1, r, c);
+        if (isMatch) { this.isProcessing = true; await this.processMove(r1, c1, r, c); this.isProcessing = false; return; }
+    } this.render();
+};
+</script>
+</body>
+</html>
