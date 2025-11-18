@@ -1,6 +1,6 @@
 # Match-3 Analyzer - 三消关卡“临界胜利点”分析器
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT]](https://opensource.org/licenses/MIT)
 
 一个独特的Web小工具，不仅可以让你在线试玩多个预设的三消游戏关卡，更核心的功能是利用AI模拟来寻找每个关卡最关键的“临界胜利点”（Almost Win Point）。
 
